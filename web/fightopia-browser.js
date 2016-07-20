@@ -1,18 +1,69 @@
 (function e(t,n,r){function s(o,u){if(!n[o]){if(!t[o]){var a=typeof require=="function"&&require;if(!u&&a)return a(o,!0);if(i)return i(o,!0);var f=new Error("Cannot find module '"+o+"'");throw f.code="MODULE_NOT_FOUND",f}var l=n[o]={exports:{}};t[o][0].call(l.exports,function(e){var n=t[o][1][e];return s(n?n:e)},l,l.exports,e,t,n,r)}return n[o].exports}var i=typeof require=="function"&&require;for(var o=0;o<r.length;o++)s(r[o]);return s})({1:[function(require,module,exports){
+(function (process){
 'use strict'
 
+const mcts = require('./lib/mcts')
 const State = require('./lib/state')
+const Piece = require('./lib/piece')
 
 exports.createNewState = createNewState
 exports.test = test
+
+const fightopia = exports
 
 // Create a new state object.
 function createNewState () {
   return State.createInitial()
 }
 
+const ROUNDS = 2
+
 // Run a simple test.
 function test () {
+  let gameState = fightopia.createNewState()
+  gameState.print()
+
+  while (performAnAction(gameState)) {
+    gameState.print()
+  }
+
+  console.log('')
+  console.log(`winner: ${gameState.winner()}`)
+}
+
+// Perform an action.
+function performAnAction (gameState) {
+  if (gameState.winner()) return false
+
+  let action
+  const player = gameState.currentPlayer()
+
+  if (player === Piece.BLACK) {
+    action = getMCTSAction(gameState, player)
+  } else {
+    action = getRandomAction(gameState, player)
+  }
+
+  gameState = gameState.clone()
+  gameState = gameState.performAction(action)
+
+  return !gameState.winner()
+}
+
+function getMCTSAction (gameState, player) {
+  return mcts.findAction(gameState, ROUNDS, player)
+}
+
+function getRandomAction (gameState, player) {
+  const actions = gameState.getPossibleActions()
+  if (actions.length === 0) return null
+
+  const rindex = Math.floor(actions.length * Math.random())
+  return actions[rindex]
+}
+
+// Run a simple test.
+function test2 () {
   let state = createNewState()
   state.print()
 
@@ -28,9 +79,15 @@ function test () {
 }
 
 // If this is the main module, run a simple test.
-if (require.main === module) test()
+if (require.main === module) {
+  test()
+  process.exit()
+  test2()
+}
 
-},{"./lib/state":9}],2:[function(require,module,exports){
+}).call(this,require('_process'))
+
+},{"./lib/mcts":4,"./lib/piece":5,"./lib/state":9,"_process":12}],2:[function(require,module,exports){
 'use strict'
 
 exports.MOVE = 'move'
@@ -347,6 +404,8 @@ function oppositeColor (color) {
 }
 
 },{"./pieces/gint":6,"./pieces/pawn":7,"./pieces/tank":8}],6:[function(require,module,exports){
+'use strict'
+
 const Piece = require('../piece')
 const Action = require('../action')
 
@@ -446,6 +505,8 @@ function getTank (state, color, x, y) {
 module.exports = Gint
 
 },{"../action":2,"../piece":5}],7:[function(require,module,exports){
+'use strict'
+
 const Piece = require('../piece')
 const Action = require('../action')
 
@@ -501,6 +562,8 @@ class Pawn extends Piece.baseClass {
 module.exports = Pawn
 
 },{"../action":2,"../piece":5}],8:[function(require,module,exports){
+'use strict'
+
 const Piece = require('../piece')
 const Action = require('../action')
 
@@ -11064,6 +11127,127 @@ if ( !noGlobal ) {
 
 return jQuery;
 } );
+
+},{}],12:[function(require,module,exports){
+// shim for using process in browser
+
+var process = module.exports = {};
+
+// cached from whatever global is present so that test runners that stub it
+// don't break things.  But we need to wrap it in a try catch in case it is
+// wrapped in strict mode code which doesn't define any globals.  It's inside a
+// function because try/catches deoptimize in certain engines.
+
+var cachedSetTimeout;
+var cachedClearTimeout;
+
+(function () {
+  try {
+    cachedSetTimeout = setTimeout;
+  } catch (e) {
+    cachedSetTimeout = function () {
+      throw new Error('setTimeout is not defined');
+    }
+  }
+  try {
+    cachedClearTimeout = clearTimeout;
+  } catch (e) {
+    cachedClearTimeout = function () {
+      throw new Error('clearTimeout is not defined');
+    }
+  }
+} ())
+var queue = [];
+var draining = false;
+var currentQueue;
+var queueIndex = -1;
+
+function cleanUpNextTick() {
+    if (!draining || !currentQueue) {
+        return;
+    }
+    draining = false;
+    if (currentQueue.length) {
+        queue = currentQueue.concat(queue);
+    } else {
+        queueIndex = -1;
+    }
+    if (queue.length) {
+        drainQueue();
+    }
+}
+
+function drainQueue() {
+    if (draining) {
+        return;
+    }
+    var timeout = cachedSetTimeout(cleanUpNextTick);
+    draining = true;
+
+    var len = queue.length;
+    while(len) {
+        currentQueue = queue;
+        queue = [];
+        while (++queueIndex < len) {
+            if (currentQueue) {
+                currentQueue[queueIndex].run();
+            }
+        }
+        queueIndex = -1;
+        len = queue.length;
+    }
+    currentQueue = null;
+    draining = false;
+    cachedClearTimeout(timeout);
+}
+
+process.nextTick = function (fun) {
+    var args = new Array(arguments.length - 1);
+    if (arguments.length > 1) {
+        for (var i = 1; i < arguments.length; i++) {
+            args[i - 1] = arguments[i];
+        }
+    }
+    queue.push(new Item(fun, args));
+    if (queue.length === 1 && !draining) {
+        cachedSetTimeout(drainQueue, 0);
+    }
+};
+
+// v8 likes predictible objects
+function Item(fun, array) {
+    this.fun = fun;
+    this.array = array;
+}
+Item.prototype.run = function () {
+    this.fun.apply(null, this.array);
+};
+process.title = 'browser';
+process.browser = true;
+process.env = {};
+process.argv = [];
+process.version = ''; // empty string to avoid regexp issues
+process.versions = {};
+
+function noop() {}
+
+process.on = noop;
+process.addListener = noop;
+process.once = noop;
+process.off = noop;
+process.removeListener = noop;
+process.removeAllListeners = noop;
+process.emit = noop;
+
+process.binding = function (name) {
+    throw new Error('process.binding is not supported');
+};
+
+process.cwd = function () { return '/' };
+process.chdir = function (dir) {
+    throw new Error('process.chdir is not supported');
+};
+process.umask = function() { return 0; };
 
 },{}]},{},[3])
 // sourceMappingURL annotation removed by cat-source-map

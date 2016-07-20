@@ -1,17 +1,67 @@
 'use strict'
 
+const mcts = require('./lib/mcts')
 const State = require('./lib/state')
+const Piece = require('./lib/piece')
 
 exports.createNewState = createNewState
 exports.test = test
+
+const fightopia = exports
 
 // Create a new state object.
 function createNewState () {
   return State.createInitial()
 }
 
+const ROUNDS = 2
+
 // Run a simple test.
 function test () {
+  let gameState = fightopia.createNewState()
+  gameState.print()
+
+  while (performAnAction(gameState)) {
+    gameState.print()
+  }
+
+  console.log('')
+  console.log(`winner: ${gameState.winner()}`)
+}
+
+// Perform an action.
+function performAnAction (gameState) {
+  if (gameState.winner()) return false
+
+  let action
+  const player = gameState.currentPlayer()
+
+  if (player === Piece.BLACK) {
+    action = getMCTSAction(gameState, player)
+  } else {
+    action = getRandomAction(gameState, player)
+  }
+
+  gameState = gameState.clone()
+  gameState = gameState.performAction(action)
+
+  return !gameState.winner()
+}
+
+function getMCTSAction (gameState, player) {
+  return mcts.findAction(gameState, ROUNDS, player)
+}
+
+function getRandomAction (gameState, player) {
+  const actions = gameState.getPossibleActions()
+  if (actions.length === 0) return null
+
+  const rindex = Math.floor(actions.length * Math.random())
+  return actions[rindex]
+}
+
+// Run a simple test.
+function test2 () {
   let state = createNewState()
   state.print()
 
@@ -27,4 +77,8 @@ function test () {
 }
 
 // If this is the main module, run a simple test.
-if (require.main === module) test()
+if (require.main === module) {
+  test()
+  process.exit()
+  test2()
+}
