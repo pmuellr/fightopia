@@ -30,7 +30,7 @@ function test () {
 // If this is the main module, run a simple test.
 if (require.main === module) test()
 
-},{"./lib/state":8}],2:[function(require,module,exports){
+},{"./lib/state":9}],2:[function(require,module,exports){
 'use strict'
 
 exports.MOVE = 'move'
@@ -115,14 +115,17 @@ class Action {
 const jQuery = require('jquery')
 
 const svg = require('./svg')
-// const Piece = require('./piece')
+const mcts = require('./mcts')
+const Piece = require('./piece')
 const fightopia = require('../fightopia')
+
+const ROUNDS = 2
 
 let gameEL
 let gameState = fightopia.createNewState()
 // let gameInterval
 
-jQuery(onLoad)
+jQuery(() => setTimeout(onLoad, 1000))
 
 // Code to run when document is loaded.
 function onLoad () {
@@ -131,31 +134,178 @@ function onLoad () {
 
   jQuery('body').append(gameEL)
 
-  console.profile()
   while (performAnAction()) {}
-  console.profileEnd()
 
   svg.updateBoardElement(gameEL, gameState)
 }
 
 // Perform an action.
 function performAnAction () {
-  const actions = gameState.getPossibleActions()
-  const rindex = Math.floor(actions.length * Math.random())
-  const action = actions[rindex]
+  if (gameState.winner()) return false
 
-  // console.log(`action: ${action}`)
-  gameState = gameState.performAction(action)
-  // svg.updateBoardElement(gameEL, gameState)
+  let action
+  const player = gameState.currentPlayer()
 
-  if (gameState.winner()) {
-    return false
+  if (player === Piece.BLACK) {
+    action = getMCTSAction(gameState, player)
+  } else {
+    action = getRandomAction(gameState, player)
   }
 
-  return true
+  gameState = gameState.clone()
+  gameState = gameState.performAction(action)
+
+  return !gameState.winner()
 }
 
-},{"../fightopia":1,"./svg":9,"jquery":10}],4:[function(require,module,exports){
+function getMCTSAction (gameState, player) {
+  return mcts.findAction(gameState, ROUNDS, player)
+}
+
+function getRandomAction (gameState, player) {
+  const actions = gameState.getPossibleActions()
+  if (actions.length === 0) return null
+
+  const rindex = Math.floor(actions.length * Math.random())
+  return actions[rindex]
+}
+
+},{"../fightopia":1,"./mcts":4,"./piece":5,"./svg":10,"jquery":11}],4:[function(require,module,exports){
+'use strict'
+
+exports.findAction = findAction
+
+// based on https://github.com/dbravender/mcts
+
+// The passed in `state` object is the game state to evaluate.
+// The evaluation will consist of `rounds` # of evaluations.
+// The `player` object is the current player.
+//
+// The `state` object must implement the following methods:
+//
+// * clone() - returns a new `state` object which is a copy of
+//   of the existing `state` object
+//
+// * possibleActions() - returns an array of `action` objects
+//   which are legal at this point.
+//
+// * performAction(action) - performs the action by updating
+//   the internal game state of the `state` object
+//
+// * currentPlayer() - returns the current `player` object
+//
+// * winner() - returns a `player` object or null if no winner yet
+
+// Models the Monte Carlo Tree Search engine.
+
+// Given the state, rounds and player, find the best action.
+function findAction (state, rounds, player) {
+  const rootNode = new Node(null, player, state, null, 0)
+
+  for (let round = 0; round < rounds; round++) {
+    rootNode.visits++
+
+    let currentNode = rootNode
+    while (currentNode.getChildren().length !== 0) {
+      currentNode = currentNode.nextMove()
+      currentNode.visits++
+    }
+
+    if (player === currentNode.winner()) {
+      while (currentNode.parent) {
+        currentNode.wins++
+        currentNode = currentNode.parent
+      }
+    }
+  }
+
+  const sortedNodes = rootNode.getChildren().sort((a, b) =>
+    b.visits - a.visits
+  )
+
+  return sortedNodes[0].action
+}
+
+// Models a node in the search tree.
+class Node {
+
+  constructor (parent, player, state, action, depth) {
+    this.parent = parent
+    this.player = player
+    this.state = state
+    this.action = action
+    this.depth = depth || 0
+    this.wins = 0
+    this.visits = 0
+    this.children = null
+  }
+
+  // Upper Confidence Bound 1
+  // see https://en.wikipedia.org/wiki/Monte_Carlo_tree_search#Exploration_and_exploitation
+  ucb1 () {
+    if (this.visits === 0) return 0
+
+    return (this.wins / this.visits) +
+      Math.sqrt(2 * Math.log(this.parent.visits) / this.visits)
+  }
+
+  // Calculate and return the children of this node.
+  getChildren () {
+    if (this.children != null) return this.children
+
+    if (this.action != null) {
+      this.state.performAction(this.action)
+    }
+
+    this.children = this.state.possibleActions().map((action) =>
+      new Node(this, this.player, this.state.clone(), action, this.depth + 1)
+    )
+
+    return this.children
+  }
+
+  // Return the winner of the game, or null if no winner yet.
+  winner () {
+    this.getChildren()  // force a move
+
+    return this.state.winner()
+  }
+
+  // Return the next action
+  nextMove () {
+    const sortable = this.getChildren().map((child) =>
+      ({ sortValue: child.sortValue(), child: child })
+    )
+
+    // sort by ucb1 or visits
+    const sorted = sortable.sort((a, b) =>
+      b.sortValue - a.sortValue
+    )
+
+    // get the max value
+    const max = sorted[0].sortValue
+
+    // collect all with the max value
+    const maxes = sorted.filter((sortChild) =>
+      sortChild.sortValue === max
+    )
+
+    // pick one of these at random
+    const index = Math.floor(Math.random() * maxes.length)
+    return maxes[index].child
+  }
+
+  // Return sorting value for selection.
+  sortValue () {
+    if (this.parent.state.currentPlayer() === this.player) {
+      return this.ucb1()
+    } else {
+      return -this.visits
+    }
+  }
+}
+
+},{}],5:[function(require,module,exports){
 'use strict'
 
 // const Action = require('./action')
@@ -196,7 +346,7 @@ function oppositeColor (color) {
   return (color === exports.BLACK) ? exports.WHITE : exports.BLACK
 }
 
-},{"./pieces/gint":5,"./pieces/pawn":6,"./pieces/tank":7}],5:[function(require,module,exports){
+},{"./pieces/gint":6,"./pieces/pawn":7,"./pieces/tank":8}],6:[function(require,module,exports){
 const Piece = require('../piece')
 const Action = require('../action')
 
@@ -295,7 +445,7 @@ function getTank (state, color, x, y) {
 
 module.exports = Gint
 
-},{"../action":2,"../piece":4}],6:[function(require,module,exports){
+},{"../action":2,"../piece":5}],7:[function(require,module,exports){
 const Piece = require('../piece')
 const Action = require('../action')
 
@@ -350,7 +500,7 @@ class Pawn extends Piece.baseClass {
 
 module.exports = Pawn
 
-},{"../action":2,"../piece":4}],7:[function(require,module,exports){
+},{"../action":2,"../piece":5}],8:[function(require,module,exports){
 const Piece = require('../piece')
 const Action = require('../action')
 
@@ -530,7 +680,7 @@ class Tank extends Piece.baseClass {
 
 module.exports = Tank
 
-},{"../action":2,"../piece":4}],8:[function(require,module,exports){
+},{"../action":2,"../piece":5}],9:[function(require,module,exports){
 'use strict'
 
 // const util = require('./util')
@@ -551,28 +701,29 @@ class State {
   constructor () {
     this.rows = 8
     this.cols = 8
-    this.turn = null
+    this.player = null
     this.pieces = new Set()
     this.board = null
   }
 
-  performAction (action) {
-    if (action == null) return
+  // Make a copy of this state.
+  clone () {
+    const result = new State()
 
-    // Create a new state object based on this one.
-    const newState = this.clone()
-    const newAction = action.swizzle(newState)
+    result.player = this.player
 
-    newAction.perform(newState)
-    newState.turn = Piece.oppositeColor(this.turn)
-    newState.recalcBoard()
+    for (let piece of this.pieces) {
+      result.pieces.add(piece.clone())
+    }
 
-    return newState
+    result.recalcBoard()
+    return result
   }
 
-  getPossibleActions () {
+  // Return an array of possible actions at this state.
+  possibleActions () {
     const pieces = Array.from(this.pieces).filter((piece) =>
-      this.turn === piece.color
+      this.player === piece.color
     )
 
     const actions = []
@@ -585,23 +736,19 @@ class State {
     return actions
   }
 
-  // Return whether specified location is valid.
-  isValidPosition (x, y) {
-    if (x < 0) return false
-    if (y < 0) return false
-    if (x >= this.cols) return false
-    if (y >= this.rows) return false
-
-    return true
+  // Update the game state with the specified action.
+  performAction (action) {
+    action.perform(this)
+    this.player = Piece.oppositeColor(this.player)
+    this.recalcBoard()
   }
 
-  // Return the piece at the specified position.
-  pieceAt (x, y) {
-    if (!this.isValidPosition(x, y)) return null
-    return this.board[y][x]
+  // Return the current player
+  currentPlayer () {
+    return this.player
   }
 
-  // Return the winning side, if any.
+  // Return the winning player, if any.
   winner () {
     let tanksB = 0
     let tanksW = 0
@@ -627,6 +774,22 @@ class State {
     return null
   }
 
+  // Return whether specified location is valid.
+  isValidPosition (x, y) {
+    if (x < 0) return false
+    if (y < 0) return false
+    if (x >= this.cols) return false
+    if (y >= this.rows) return false
+
+    return true
+  }
+
+  // Return the piece at the specified position.
+  pieceAt (x, y) {
+    if (!this.isValidPosition(x, y)) return null
+    return this.board[y][x]
+  }
+
   // Recalculate the board.
   recalcBoard () {
     this.board = []
@@ -638,8 +801,10 @@ class State {
     }
 
     for (let piece of this.pieces) {
+      // PAWN
       if (piece.type === Piece.PAWN) {
         this.board[piece.y][piece.x] = piece
+      // TANK
       } else if (piece.type === Piece.TANK) {
         if (piece.vert) {
           this.board[piece.y + 0][piece.x] = piece
@@ -648,6 +813,7 @@ class State {
           this.board[piece.y][piece.x + 0] = piece
           this.board[piece.y][piece.x + 1] = piece
         }
+      // GINT
       } else {
         this.board[piece.y + 0][piece.x + 0] = piece
         this.board[piece.y + 0][piece.x + 1] = piece
@@ -655,20 +821,6 @@ class State {
         this.board[piece.y + 1][piece.x + 1] = piece
       }
     }
-  }
-
-  // Make a copy of this state.
-  clone () {
-    const result = new State()
-
-    result.turn = this.turn
-
-    for (let piece of this.pieces) {
-      result.pieces.add(piece.clone())
-    }
-
-    result.recalcBoard()
-    return result
   }
 
   // Print the state to stdout.
@@ -714,7 +866,7 @@ function setInitialPieces (state) {
     ' PP  PP '
   ].map((s) => s.split(''))
 
-  state.turn = Piece.BLACK
+  state.player = Piece.BLACK
 
   for (let y = 0; y < init.length; y++) {
     const row = init[y]
@@ -737,7 +889,7 @@ function setInitialPieces (state) {
   state.recalcBoard()
 }
 
-},{"./piece":4}],9:[function(require,module,exports){
+},{"./piece":5}],10:[function(require,module,exports){
 'use strict'
 
 const jQuery = require('jquery')
@@ -837,7 +989,7 @@ function updateBoardElement (el, state) {
   jQuery(el).html(jQuery(el).html()) // refresh the HTML sigh
 }
 
-},{"../piece":4,"jquery":10}],10:[function(require,module,exports){
+},{"../piece":5,"jquery":11}],11:[function(require,module,exports){
 /*eslint-disable no-unused-vars*/
 /*!
  * jQuery JavaScript Library v3.1.0

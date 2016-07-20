@@ -9,8 +9,13 @@ Note: this project is not associated in any way the awesome folk at
 Cheapass Games at http://www.cheapass.com/
 
 
+![image of winning board](web/board.png)
+
 usage
 ================================================================================
+
+Fightopia! rules, downloaded from Cheapass web site:
+[Fightopia.pdf](Fightopia.pdf)
 
 TBD
 
