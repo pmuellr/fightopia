@@ -14,14 +14,15 @@ function createNewState () {
   return State.createInitial()
 }
 
-const ROUNDS = 2
+const ROUNDS = 200
 
 // Run a simple test.
 function test () {
   let gameState = fightopia.createNewState()
   gameState.print()
 
-  while (performAnAction(gameState)) {
+  while (!gameState.winner()) {
+    gameState = performAnAction(gameState)
     gameState.print()
   }
 
@@ -31,8 +32,6 @@ function test () {
 
 // Perform an action.
 function performAnAction (gameState) {
-  if (gameState.winner()) return false
-
   let action
   const player = gameState.currentPlayer()
 
@@ -42,10 +41,12 @@ function performAnAction (gameState) {
     action = getRandomAction(gameState, player)
   }
 
-  gameState = gameState.clone()
-  gameState = gameState.performAction(action)
+  console.log(`${player} action: ${action}`)
 
-  return !gameState.winner()
+  gameState = gameState.clone()
+  gameState.performAction(action)
+
+  return gameState
 }
 
 function getMCTSAction (gameState, player) {
@@ -53,7 +54,7 @@ function getMCTSAction (gameState, player) {
 }
 
 function getRandomAction (gameState, player) {
-  const actions = gameState.getPossibleActions()
+  const actions = gameState.possibleActions()
   if (actions.length === 0) return null
 
   const rindex = Math.floor(actions.length * Math.random())

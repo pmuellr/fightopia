@@ -16,14 +16,15 @@ function createNewState () {
   return State.createInitial()
 }
 
-const ROUNDS = 2
+const ROUNDS = 200
 
 // Run a simple test.
 function test () {
   let gameState = fightopia.createNewState()
   gameState.print()
 
-  while (performAnAction(gameState)) {
+  while (!gameState.winner()) {
+    gameState = performAnAction(gameState)
     gameState.print()
   }
 
@@ -33,8 +34,6 @@ function test () {
 
 // Perform an action.
 function performAnAction (gameState) {
-  if (gameState.winner()) return false
-
   let action
   const player = gameState.currentPlayer()
 
@@ -44,10 +43,12 @@ function performAnAction (gameState) {
     action = getRandomAction(gameState, player)
   }
 
-  gameState = gameState.clone()
-  gameState = gameState.performAction(action)
+  console.log(`${player} action: ${action}`)
 
-  return !gameState.winner()
+  gameState = gameState.clone()
+  gameState.performAction(action)
+
+  return gameState
 }
 
 function getMCTSAction (gameState, player) {
@@ -55,7 +56,7 @@ function getMCTSAction (gameState, player) {
 }
 
 function getRandomAction (gameState, player) {
-  const actions = gameState.getPossibleActions()
+  const actions = gameState.possibleActions()
   if (actions.length === 0) return null
 
   const rindex = Math.floor(actions.length * Math.random())
@@ -125,7 +126,7 @@ class Action {
     this.y = y
   }
 
-  // Return a new action that's the same as this, except for
+  // Return a new action that's the same as this, except that
   // it now points to the piece in specied state, that's in the
   // same location as the state of the current piece.
   swizzle (state) {
@@ -176,30 +177,25 @@ const mcts = require('./mcts')
 const Piece = require('./piece')
 const fightopia = require('../fightopia')
 
-const ROUNDS = 2
+const ROUNDS = 100
 
 let gameEL
 let gameState = fightopia.createNewState()
 // let gameInterval
 
-jQuery(() => setTimeout(onLoad, 1000))
+jQuery(onLoad)
 
 // Code to run when document is loaded.
 function onLoad () {
-  console.log('onLoad()!')
   gameEL = svg.createBoardElement(gameState)
 
   jQuery('body').append(gameEL)
 
-  while (performAnAction()) {}
-
-  svg.updateBoardElement(gameEL, gameState)
+  setTimeout(performAnAction, 200)
 }
 
 // Perform an action.
 function performAnAction () {
-  if (gameState.winner()) return false
-
   let action
   const player = gameState.currentPlayer()
 
@@ -210,9 +206,16 @@ function performAnAction () {
   }
 
   gameState = gameState.clone()
-  gameState = gameState.performAction(action)
+  gameState.performAction(action)
 
-  return !gameState.winner()
+  svg.updateBoardElement(gameEL, gameState)
+
+  if (gameState.winner()) {
+    alert(`winner: ${gameState.winner()}`)
+    return
+  }
+
+  setTimeout(performAnAction, 10)
 }
 
 function getMCTSAction (gameState, player) {
@@ -220,7 +223,7 @@ function getMCTSAction (gameState, player) {
 }
 
 function getRandomAction (gameState, player) {
-  const actions = gameState.getPossibleActions()
+  const actions = gameState.possibleActions()
   if (actions.length === 0) return null
 
   const rindex = Math.floor(actions.length * Math.random())
@@ -230,13 +233,15 @@ function getRandomAction (gameState, player) {
 },{"../fightopia":1,"./mcts":4,"./piece":5,"./svg":10,"jquery":11}],4:[function(require,module,exports){
 'use strict'
 
+// Monte Carlo Tree Search
+
 exports.findAction = findAction
 
 // based on https://github.com/dbravender/mcts
 
 // The passed in `state` object is the game state to evaluate.
 // The evaluation will consist of `rounds` # of evaluations.
-// The `player` object is the current player.
+// The `player` object is the current player object.
 //
 // The `state` object must implement the following methods:
 //
@@ -244,7 +249,7 @@ exports.findAction = findAction
 //   of the existing `state` object
 //
 // * possibleActions() - returns an array of `action` objects
-//   which are legal at this point.
+//   which are legal at this point
 //
 // * performAction(action) - performs the action by updating
 //   the internal game state of the `state` object
@@ -260,15 +265,20 @@ function findAction (state, rounds, player) {
   const rootNode = new Node(null, player, state, null, 0)
 
   for (let round = 0; round < rounds; round++) {
+    // console.log('----------------------------------------------')
+    // console.log(`round ${round}`)
+    // console.log('----------------------------------------------')
     rootNode.visits++
 
     let currentNode = rootNode
-    while (currentNode.getChildren().length !== 0) {
-      currentNode = currentNode.nextMove()
+    while (!currentNode.winner()) {
+      currentNode = currentNode.nextAction()
+      if (!currentNode) break
+
       currentNode.visits++
     }
 
-    if (player === currentNode.winner()) {
+    if (currentNode && (player === currentNode.winner())) {
       while (currentNode.parent) {
         currentNode.wins++
         currentNode = currentNode.parent
@@ -287,6 +297,9 @@ function findAction (state, rounds, player) {
 class Node {
 
   constructor (parent, player, state, action, depth) {
+    // console.log(`Node::constructor(,${player}),,${action},${depth}`)
+    // state.print()
+
     this.parent = parent
     this.player = player
     this.state = state
@@ -311,30 +324,40 @@ class Node {
     if (this.children != null) return this.children
 
     if (this.action != null) {
+      // console.log('before:')
+      // this.state.print()
+      // console.log(`Node::getChildren: performAction(${this.action})`)
       this.state.performAction(this.action)
+      // console.log('after:')
+      // this.state.print()
     }
 
+    // console.log('Node::getChildren: -> creating children')
     this.children = this.state.possibleActions().map((action) =>
-      new Node(this, this.player, this.state.clone(), action, this.depth + 1)
+      new Node(this, this.state.currentPlayer(), this.state.clone(), action, this.depth + 1)
     )
+    // console.log('Node::getChildren: <- creating children')
 
     return this.children
   }
 
   // Return the winner of the game, or null if no winner yet.
   winner () {
-    this.getChildren()  // force a move
+    // this.getChildren()  // force a action
 
     return this.state.winner()
   }
 
   // Return the next action
-  nextMove () {
+  nextAction () {
+    // create a sortable array of the children
     const sortable = this.getChildren().map((child) =>
       ({ sortValue: child.sortValue(), child: child })
     )
 
-    // sort by ucb1 or visits
+    if (sortable.length === 0) return null
+
+    // sort by ucb1 / visits
     const sorted = sortable.sort((a, b) =>
       b.sortValue - a.sortValue
     )
@@ -766,7 +789,6 @@ class State {
     this.cols = 8
     this.player = null
     this.pieces = new Set()
-    this.board = null
   }
 
   // Make a copy of this state.
@@ -775,11 +797,10 @@ class State {
 
     result.player = this.player
 
-    for (let piece of this.pieces) {
+    this.pieces.forEach((piece) =>
       result.pieces.add(piece.clone())
-    }
+    )
 
-    result.recalcBoard()
     return result
   }
 
@@ -790,17 +811,18 @@ class State {
     )
 
     const actions = []
-    for (let piece of pieces) {
-      for (let pieceAction of piece.getPossibleActions(this)) {
+    pieces.forEach((piece) => {
+      piece.getPossibleActions(this).forEach((pieceAction) => {
         actions.push(pieceAction)
-      }
-    }
+      })
+    })
 
     return actions
   }
 
   // Update the game state with the specified action.
   performAction (action) {
+    action = action.swizzle(this)
     action.perform(this)
     this.player = Piece.oppositeColor(this.player)
     this.recalcBoard()
@@ -819,7 +841,6 @@ class State {
     for (let piece of this.pieces) {
       if (piece.type === Piece.TANK) {
         (piece.color === Piece.BLACK) ? tanksB++ : tanksW++
-        continue
       }
 
       if (piece.type === Piece.GINT) {
@@ -849,41 +870,46 @@ class State {
 
   // Return the piece at the specified position.
   pieceAt (x, y) {
-    if (!this.isValidPosition(x, y)) return null
-    return this.board[y][x]
+    // if (!this.isValidPosition(x, y)) return null
+
+    for (let piece of this.pieces) {
+      let px1 = piece.x
+      let py1 = piece.y
+
+      if (piece.type === Piece.PAWN) {
+        if (x === px1 && y === py1) return piece
+      }
+
+      if (piece.type === Piece.TANK) {
+        let px2 = px1
+        let py2 = py1
+
+        piece.vert ? py2++ : px2++
+
+        if (x === px1 && y === py1) return piece
+        if (x === px2 && y === py2) return piece
+      }
+
+      if (piece.type === Piece.GINT) {
+        let px2 = px1 + 1
+        let py2 = py1
+        let px3 = px1
+        let py3 = py1 + 1
+        let px4 = px1 + 1
+        let py4 = py1 + 1
+
+        if (x === px1 && y === py1) return piece
+        if (x === px2 && y === py2) return piece
+        if (x === px3 && y === py3) return piece
+        if (x === px4 && y === py4) return piece
+      }
+    }
+
+    return null
   }
 
   // Recalculate the board.
   recalcBoard () {
-    this.board = []
-    for (let y = 0; y < this.rows; y++) {
-      this.board.push([])
-      for (let x = 0; x < this.cols; x++) {
-        this.board[this.board.length - 1].push(null)
-      }
-    }
-
-    for (let piece of this.pieces) {
-      // PAWN
-      if (piece.type === Piece.PAWN) {
-        this.board[piece.y][piece.x] = piece
-      // TANK
-      } else if (piece.type === Piece.TANK) {
-        if (piece.vert) {
-          this.board[piece.y + 0][piece.x] = piece
-          this.board[piece.y + 1][piece.x] = piece
-        } else {
-          this.board[piece.y][piece.x + 0] = piece
-          this.board[piece.y][piece.x + 1] = piece
-        }
-      // GINT
-      } else {
-        this.board[piece.y + 0][piece.x + 0] = piece
-        this.board[piece.y + 0][piece.x + 1] = piece
-        this.board[piece.y + 1][piece.x + 0] = piece
-        this.board[piece.y + 1][piece.x + 1] = piece
-      }
-    }
   }
 
   // Print the state to stdout.
