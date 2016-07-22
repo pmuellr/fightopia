@@ -16,7 +16,7 @@ function createNewState () {
   return State.createInitial()
 }
 
-const ROUNDS = 200
+const ROUNDS = 100
 
 // Run a simple test.
 function test () {
@@ -120,50 +120,52 @@ function createShootPawn (piece, x, y) {
 // Models an action that a piece can make.
 class Action {
   constructor (piece, type, x, y) {
-    this.piece = piece
+    this.pieceX = piece.x
+    this.pieceY = piece.y
     this.type = type
     this.x = x
     this.y = y
   }
 
-  // Return a new action that's the same as this, except that
-  // it now points to the piece in specied state, that's in the
-  // same location as the state of the current piece.
-  swizzle (state) {
-    const newPiece = state.pieceAt(this.piece.x, this.piece.y)
-    return new Action(newPiece, this.type, this.x, this.y)
-  }
-
   // Perform the action on a state, mutating it.
   perform (state) {
+    const piece = getPiece(state)
+
     if (this.type === exports.MOVE) {
-      this.piece.x = this.x
-      this.piece.y = this.y
+      piece.x = this.x
+      piece.y = this.y
+      return
+    }
+
+    if (this.type === exports.PIVOT) {
+      piece.x = this.x
+      piece.y = this.y
+      piece.vert = !this.piece.vert
       return
     }
 
     if (this.type === exports.KILL_TANK) {
-      const tank = state.pieceAt(this.x, this.y)
+      const tank = state.getPieceAt(this.x, this.y)
+      state.deletePiece(tank)
       state.pieces.delete(tank)
       return
     }
 
     if (this.type === exports.SHOOT_PAWN) {
-      const pawn = state.pieceAt(this.x, this.y)
-      state.pieces.delete(pawn)
-      return
-    }
-
-    if (this.type === exports.PIVOT) {
-      this.piece.x = this.x
-      this.piece.y = this.y
-      this.piece.vert = !this.piece.vert
+      const pawn = state.getPieceAt(this.x, this.y)
+      state.deletePiece(pawn)
+      state.pieces.delete(tank)
       return
     }
   }
 
+  // Return the Piece associated with the action.
+  getPiece (state) {
+    return state.getPieceAt(this.pieceX, this.pieceY)
+  }
+
   toString () {
-    return `${this.piece.toString()} ${this.type} [${this.x + 1}, ${this.y + 1}]`
+    return `${this.getPiece().toString()} ${this.type} [${this.x + 1}, ${this.y + 1}]`
   }
 }
 
@@ -177,7 +179,7 @@ const mcts = require('./mcts')
 const Piece = require('./piece')
 const fightopia = require('../fightopia')
 
-const ROUNDS = 100
+const ROUNDS = 10
 
 let gameEL
 let gameState = fightopia.createNewState()
@@ -211,7 +213,7 @@ function performAnAction () {
   svg.updateBoardElement(gameEL, gameState)
 
   if (gameState.winner()) {
-    alert(`winner: ${gameState.winner()}`)
+    alert(`winner: ${gameState.winner()}`) // eslint-disable-line no-undef
     return
   }
 
@@ -235,34 +237,164 @@ function getRandomAction (gameState, player) {
 
 // Monte Carlo Tree Search
 
-exports.findAction = findAction
+exports.create = create
 
 // based on https://github.com/dbravender/mcts
 
 // The passed in `state` object is the game state to evaluate.
 // The evaluation will consist of `rounds` # of evaluations.
-// The `player` object is the current player object.
+// The `actor` object is the current actor object.
 //
 // The `state` object must implement the following methods:
 //
 // * clone() - returns a new `state` object which is a copy of
 //   of the existing `state` object
 //
-// * possibleActions() - returns an array of `action` objects
+// * getCurrentPlayer() - returns the current `actor` object
+//
+// * getPossibleActions() - returns an array of `action` objects
 //   which are legal at this point
+//
+// * getPreferredActions() - returns an array of `action` objects
+//   are the preferred ones from the possible ones (optional, and
+//   only used during the simulation phase)
 //
 // * performAction(action) - performs the action by updating
 //   the internal game state of the `state` object
 //
-// * currentPlayer() - returns the current `player` object
-//
-// * winner() - returns a `player` object or null if no winner yet
+// * isFinished() - returns null if game is not done, or indication of
+//   finish state
 
 // Models the Monte Carlo Tree Search engine.
 
-// Given the state, rounds and player, find the best action.
-function findAction (state, rounds, player) {
-  const rootNode = new Node(null, player, state, null, 0)
+function create (state, actor) {
+  return new MCTS(state)
+}
+
+class MCTS {
+  constructor (state, actor) {
+    this.rootNode = new Node(state)
+    this.actor = actor || state.getCurrentActor()
+  }
+
+  // Run the MCTS engine until the deadline is hit; the deadline is an object
+  // with either `ms` (time in milliseconds) or `rounds` properties (number
+  // of rounds run).
+  run (deadline) {
+    // calculate the deadline
+    deadline = deadline || {}
+
+    let deadlineMS, deadlineRounds
+    if (deadline.ms) {
+      deadlineMS = Date.now() + deadline.ms
+    } else if (deadline.rounds) {
+      deadlineRounds = deadline.rounds
+    } else {
+      deadlineRounds = 10
+    }
+
+    let startTime = Date.now()
+    let round = 0
+    while (true) {
+      this._runOneRound()
+
+      round++
+      if (deadlineMS && Date.now >= deadlineMS) return
+      if (deadlineRounds && round >= deadlineRounds) return
+    }
+  }
+
+  // Pick the top-level action with the most visits.
+  getBestAction () {
+    const maxVisits = 0
+    const maxVisited = []
+    for (let child of this.rootNode.children) {
+      if (child.visited > maxVisits) {
+        maxVisits = child.visited
+        maxVisited = [child]
+      } if (child.visited === maxVisits) {
+        maxVisited.push(child)
+      }
+    }
+
+    return util.pickRandomElement(maxVisited)
+  }
+
+  // Perform action.
+  performAction (action) {
+    this.rootNode = this.nodeFromAction(this.rootState, action)
+    this.rootNode.parent = null
+  }
+
+  _runOneRound () {
+    // select the next node to expand from
+    const selectedNode = this._select()
+
+    // pick an unexplored action from that node
+    const newNode = this._expand(selectedNode)
+
+    // play out, random-ish-ly, from that new node, getting "winner"
+    const win = this._playout(newNode) // returns 0 or 1
+
+    this._propogate(newNode, win)
+  }
+
+  // Select a new node to analyze.
+  _select () {
+
+  }
+
+  // Expand tree at the specified node.
+  _expand (node) {
+
+  }
+
+  // Perform actions against state at the node till finished.
+  _playout (node) {
+
+  }
+
+  // Propogate results up the tree.
+  _propogate (node, win) {
+    while (node) {
+      node.visited++
+      if (node.actor == this.actor) {
+        node.wins += win
+      }
+
+      node = node.parent
+    }
+  }
+
+}
+
+// Models a node in the search tree.
+class Node {
+  constructor (state, actor, action) {
+    this.state = state
+    this.actor = actor
+    this.action = action
+    this.parent = null
+    this.children = []
+    this.visited = 0
+    this.wins = 0
+  }
+
+  createNode (action) {
+    const result = new Node(this.state.clone(), this.actor, action)
+
+    result.parent = this
+    this.children.push(result)
+  }
+}
+
+
+
+
+
+// Given the state, rounds and actor, find the best action.
+function findAction (state, rounds, actor) {
+  const rootNode = new Node(null, actor, state, null, 0)
 
   for (let round = 0; round < rounds; round++) {
     // console.log('----------------------------------------------')
@@ -271,14 +403,14 @@ function findAction (state, rounds, player) {
     rootNode.visits++
 
     let currentNode = rootNode
-    while (!currentNode.winner()) {
+    while (!currentNode.finished()) {
       currentNode = currentNode.nextAction()
       if (!currentNode) break
 
       currentNode.visits++
     }
 
-    if (currentNode && (player === currentNode.winner())) {
+    if (currentNode && (actor === currentNode.finished())) {
       while (currentNode.parent) {
         currentNode.wins++
         currentNode = currentNode.parent
@@ -296,12 +428,12 @@ function findAction (state, rounds, player) {
 // Models a node in the search tree.
 class Node {
 
-  constructor (parent, player, state, action, depth) {
-    // console.log(`Node::constructor(,${player}),,${action},${depth}`)
+  constructor (parent, actor, state, action, depth) {
+    // console.log(`Node::constructor(,${actor}),,${action},${depth}`)
     // state.print()
 
     this.parent = parent
-    this.player = player
+    this.actor = actor
     this.state = state
     this.action = action
     this.depth = depth || 0
@@ -341,11 +473,11 @@ class Node {
     return this.children
   }
 
-  // Return the winner of the game, or null if no winner yet.
-  winner () {
+  // Return whether game is finished.
+  finished () {
     // this.getChildren()  // force a action
 
-    return this.state.winner()
+    return this.state.finished()
   }
 
   // Return the next action
@@ -377,7 +509,7 @@ class Node {
 
   // Return sorting value for selection.
   sortValue () {
-    if (this.parent.state.currentPlayer() === this.player) {
+    if (this.parent.state.currentPlayer() === this.actor) {
       return this.ucb1()
     } else {
       return -this.visits
@@ -774,6 +906,8 @@ module.exports = Tank
 const Piece = require('./piece')
 
 exports.createInitial = createInitial
+exports.ROWS = 8
+exports.COLS = 8
 
 // Create a new game state.
 function createInitial () {
@@ -785,9 +919,7 @@ function createInitial () {
 // Models a game state.
 class State {
   constructor () {
-    this.rows = 8
-    this.cols = 8
-    this.player = null
+    this.actor = null
     this.pieces = new Set()
   }
 
@@ -795,23 +927,27 @@ class State {
   clone () {
     const result = new State()
 
-    result.player = this.player
+    result.actor = this.actor
 
-    this.pieces.forEach((piece) =>
-      result.pieces.add(piece.clone())
-    )
+    this.pieces = util.cloneSet(this.pieces)
 
     return result
   }
 
+  // Return the current player
+  getCurrentActor () {
+    return this.actor
+  }
+
   // Return an array of possible actions at this state.
-  possibleActions () {
-    const pieces = Array.from(this.pieces).filter((piece) =>
-      this.player === piece.color
+  getPossibleActions () {
+    const actorPieces = Array.from(this.pieces).filter((piece) =>
+      this.actor === piece.color
     )
 
     const actions = []
-    pieces.forEach((piece) => {
+
+    actorPieces.forEach((piece) => {
       piece.getPossibleActions(this).forEach((pieceAction) => {
         actions.push(pieceAction)
       })
@@ -820,32 +956,52 @@ class State {
     return actions
   }
 
+  // Return an array of preferred actions at this state.
+  // This method is optional, and only used for the simulation phase.
+  getPreferredActions () {
+    return this.possibleActions.filter((action) => {
+      const piece = action.getPiece(this)
+
+      // a bunch of obvious preferences
+      if (action.type === Piece.KILL_TANK) return true
+      if (action.type === Piece.SHOOT_PAWN) return true
+      if (action.type === Piece.PIVOT) return false
+
+      // check for GINT moving to other side (winning condition)
+      if (action.type !== Piece.MOVE) return false
+      if (piece.type !== Piece.GINT) return false
+
+      if (this.actor === Piece.BLACK) {
+        if (action.y === exports.ROWS - 2) return true
+      } else {
+        if (action.y === 0) return true
+      }
+
+      return false
+    })
+  }
+
   // Update the game state with the specified action.
   performAction (action) {
-    action = action.swizzle(this)
     action.perform(this)
-    this.player = Piece.oppositeColor(this.player)
-    this.recalcBoard()
+    this.actor = Piece.oppositeColor(this.actor)
   }
 
-  // Return the current player
-  currentPlayer () {
-    return this.player
-  }
-
-  // Return the winning player, if any.
-  winner () {
+  // Return null if game not finished, or the finished state.
+  isFinished () {
     let tanksB = 0
     let tanksW = 0
 
-    for (let piece of this.pieces) {
+    for (let i = 0; i < this.pieces.length; i++) {
+      let piece = this.pieces[i]
+
       if (piece.type === Piece.TANK) {
         (piece.color === Piece.BLACK) ? tanksB++ : tanksW++
       }
 
       if (piece.type === Piece.GINT) {
         if (piece.color === Piece.BLACK) {
-          if (piece.y === this.rows - 2) return Piece.BLACK
+          if (piece.y === exports.ROWS - 2) return Piece.BLACK
         } else {
           if (piece.y === 0) return Piece.WHITE
         }
@@ -858,19 +1014,24 @@ class State {
     return null
   }
 
+  // Delete the piece form the set of pieces.
+  deletePiece (piece) {
+    this.pieces.delete(piece)
+  }
+
   // Return whether specified location is valid.
   isValidPosition (x, y) {
     if (x < 0) return false
     if (y < 0) return false
-    if (x >= this.cols) return false
-    if (y >= this.rows) return false
+    if (x >= exports.COLS) return false
+    if (y >= exports.ROWS) return false
 
     return true
   }
 
   // Return the piece at the specified position.
-  pieceAt (x, y) {
-    // if (!this.isValidPosition(x, y)) return null
+  getPieceAt (x, y) {
+    if (!this.isValidPosition(x, y)) return null
 
     for (let piece of this.pieces) {
       let px1 = piece.x
@@ -908,17 +1069,13 @@ class State {
     return null
   }
 
-  // Recalculate the board.
-  recalcBoard () {
-  }
-
   // Print the state to stdout.
   print () {
     const board = []
 
-    for (let y = 0; y < this.rows; y++) {
+    for (let y = 0; y < exports.ROWS; y++) {
       const row = []
-      for (let x = 0; x < this.cols; x++) {
+      for (let x = 0; x < exports.COLS; x++) {
         const piece = this.pieceAt(x, y)
 
         if (piece == null) {
@@ -955,7 +1112,7 @@ function setInitialPieces (state) {
     ' PP  PP '
   ].map((s) => s.split(''))
 
-  state.player = Piece.BLACK
+  state.actor = Piece.BLACK
 
   for (let y = 0; y < init.length; y++) {
     const row = init[y]
@@ -974,8 +1131,6 @@ function setInitialPieces (state) {
       if (piece != null) state.pieces.add(piece)
     }
   }
-
-  state.recalcBoard()
 }
 
 },{"./piece":5}],10:[function(require,module,exports){

@@ -14,7 +14,7 @@ function createNewState () {
   return State.createInitial()
 }
 
-const ROUNDS = 200
+const ROUNDS = 100
 
 // Run a simple test.
 function test () {
