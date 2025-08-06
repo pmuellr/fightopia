@@ -1,9 +1,0 @@
-{
-  "verbose": false,
-  "ext": "js,json",
-  "ignore": [
-    "tmp",
-    "web/fightopia-browser.js",
-    "web/fightopia-browser.js.map.json"
-  ]
-}
