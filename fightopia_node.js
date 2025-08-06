@@ -14,13 +14,13 @@ for (let i=0; i<10000; i++) {
   const color = i % 2 ? COLOR_WHITE : COLOR_BLACK
   const actions = board.getAvailableActions(color)
   const action = actions[getRandomInt(actions.length)] 
-  console.log(action.toString())
-  action.perform(board)
   console.log('')
   console.log(`-------- ${i} --------`)
+  console.log(action.toString())
+  action.perform(board)
   board.print()
   // @ts-ignore
-  await new Promise((resolve => setTimeout(resolve, 250)))
+  await new Promise((resolve => setTimeout(resolve, 100)))
 }
 
 /** @type { (max: number): number } */
